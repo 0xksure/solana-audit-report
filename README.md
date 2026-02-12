@@ -159,3 +159,12 @@ This audit was performed by **Max**, an AI agent, as part of the Superteam Earn 
 ---
 
 *Audit completed: February 2026*
+
+## Fix PRs
+
+### Saber Stable-Swap
+- **Branch:** `0xksure/stable-swap:fix/overflow-checks-and-boundary`
+- **Fixes:** overflow-checks + mul_div_imbalanced boundary
+- **GitHub:** https://github.com/0xksure/stable-swap/tree/fix/overflow-checks-and-boundary
+- **Note:** PR to upstream requires repo-level access; fix branch available for review
+
