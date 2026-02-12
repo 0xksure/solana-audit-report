@@ -15,10 +15,10 @@ Comprehensive security audit of 5 Solana DeFi protocols, focusing on arithmetic 
 | Severity | Count |
 |----------|-------|
 | HIGH | 3 |
-| MEDIUM | 4 |
-| LOW | 5 |
+| MEDIUM | 5 |
+| LOW | 6 |
 | Informational | 5 |
-| **Total** | **17** |
+| **Total** | **19** |
 
 ### Repos Audited
 
@@ -29,6 +29,7 @@ Comprehensive security audit of 5 Solana DeFi protocols, focusing on arithmetic 
 | OpenBook v2 | [openbook-v2](https://github.com/openbook-dex/openbook-v2) | DEX/Orderbook | ~300 |
 | Saber Stable-Swap | [stable-swap](https://github.com/saber-hq/stable-swap) | AMM | ~200 |
 | Raydium CLMM | [raydium-clmm](https://github.com/raydium-io/raydium-clmm) | AMM | ~300 |
+| Pump.fun SDK | [pumpfun-rs](https://github.com/pumpfun/pumpfun-rs) | Bonding Curve | ~200 |
 
 ---
 
@@ -159,6 +160,26 @@ Comprehensive security audit of 5 Solana DeFi protocols, focusing on arithmetic 
 
 - **File:** `programs/amm/src/states/tickarray_bitmap_extension.rs`
 - **Description:** `tick_spacing as u16` casts throughout bitmap code without bounds checking.
+
+---
+
+### PUMP.FUN Client SDK
+
+#### [PF-07] Division by Zero in `get_buy_out_price` — MEDIUM
+
+- **File:** `src/accounts/bonding_curve.rs` — `get_buy_out_price()`
+- **Description:** When `amount >= virtual_token_reserves` (via the `sol_tokens` variable), the denominator `virtual_token_reserves - sol_tokens` becomes zero or underflows. Since these are unsigned integers, underflow wraps to `u64::MAX`, producing a near-zero result instead of panicking.
+- **Impact:** Client-side miscalculation — returns ~0 SOL for what should be a very expensive buyout. Could lead to setting `max_sol_cost` too low, causing transaction failure, or in a UI context, displaying incorrect prices.
+- **Fix:** Add check: `if sol_tokens >= self.virtual_token_reserves { return special_case; }`.
+
+#### [PF-08] Unchecked `as u64` Truncation from u128 — LOW
+
+- **File:** `src/accounts/bonding_curve.rs` — `get_buy_price()`, `get_sell_price()`, `get_market_cap_sol()`, `get_buy_out_price()`
+- **Description:** Multiple `as u64` casts from u128 without overflow checks. While the bonding curve math typically keeps results within u64 range, edge cases with extreme reserves could silently truncate.
+- **Impact:** Client-side only — incorrect price display or slippage calculations in edge cases.
+- **Fix:** Use `u64::try_from(value).unwrap_or(u64::MAX)` for safe truncation.
+
+**Note:** pumpfun-rs is a client SDK, not an on-chain program. These findings affect client-side price calculations only.
 
 ---
 
