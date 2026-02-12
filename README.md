@@ -1,170 +1,154 @@
-# 🔐 Solana Ecosystem Security Audit Report
+# Solana DeFi Security Audit Report
 
-**Submitted for:** [Superteam Earn — Audit & Fix Solana Repos](https://earn.superteam.fun/listing/audit-fix-solana-repos/)
-
-## Audit Scope
-
-Audited three prominent Solana DeFi protocols:
-
-### 1. Phoenix DEX v1 (Ellipsis Labs)
-- **Repo:** github.com/Ellipsis-Labs/phoenix-v1
-- **Type:** On-chain order book (FIFO matching engine)
-- **LOC:** ~17,252 Rust
-- **Risk Level:** Critical (handles order matching and settlement)
-
-### 2. OpenBook v2 (OpenBook DEX)
-- **Repo:** github.com/openbook-dex/openbook-v2
-- **Type:** On-chain order book with oracle support
-- **LOC:** ~19,490 Rust
-- **Risk Level:** Critical (DEX with oracle-dependent pricing)
-
-### 3. Saber Stable-Swap
-- **Repo:** github.com/saber-hq/stable-swap
-- **Type:** StableSwap AMM (Curve-style)
-- **LOC:** ~5,575 Rust
-- **Risk Level:** High (AMM handling stablecoin swaps)
+**Auditor:** Max (AI Co-Founder)  
+**Date:** 2026-02-12  
+**Bounty:** Superteam Audit & Fix ($3K)  
+**Targets:** Port Finance Variable-Rate Lending, Marinade Liquid Staking
 
 ---
 
-## Findings Summary
+## Executive Summary
 
-| # | Severity | Protocol | Finding | Status |
-|---|----------|----------|---------|--------|
-| 1 | 🟡 Medium | Phoenix v1 | Raw arithmetic in TraderState balance operations | Mitigated by overflow-checks |
-| 2 | 🟢 Low | Phoenix v1 | Inconsistent use of checked vs unchecked arithmetic | Informational |
-| 3 | 🟡 Medium | OpenBook v2 | Oracle staleness bound edge case | See details |
-| 4 | 🟢 Low | OpenBook v2 | UncheckedAccount usage in create_market | Documented |
-| 5 | 🟡 Medium | Saber | Missing overflow-checks in release profile | See fix |
-| 6 | 🟢 Low | Saber | mul_div_imbalanced boundary condition | See details |
+Audited two Solana DeFi protocols for common vulnerability classes. Port Finance has several medium-to-high severity findings due to missing overflow protection and oracle handling issues. Marinade is notably more hardened (Anchor framework, overflow-checks enabled, extensive validation) but has minor concerns.
 
 ---
 
-## Detailed Findings
+## Target 1: Port Finance Variable-Rate Lending
 
-### Finding 1: Phoenix v1 — Raw Arithmetic in TraderState
+Repository: https://github.com/port-finance/variable-rate-lending
 
-**File:** `src/state/trader_state.rs`
-**Severity:** Medium (mitigated)
+### Finding PF-01: Missing `overflow-checks` in Release Profile (HIGH)
 
-The `TraderState` struct uses raw `-=` and `+=` operators for balance mutations:
+- **Severity:** HIGH
+- **File:** `token-lending/program/Cargo.toml`
+- **Description:** The `[profile.release]` section does not include `overflow-checks = true`. The `coverage.sh` script explicitly disables overflow checks (`-Coverflow-checks=off`). This means all arithmetic in the program relies on manual checked math — any missed check silently wraps around.
+- **Impact:** Silent integer overflow in financial calculations (interest, collateral ratios, liquidation amounts) could allow attackers to manipulate protocol state, steal funds, or create unbacked debt.
+- **PoC Steps:**
+  1. Identify any arithmetic path using native `+`, `-`, `*` operators instead of `checked_*` variants
+  2. Supply crafted inputs that cause overflow (e.g., very large deposit amounts)
+  3. Observe wrapped values producing incorrect collateral/debt calculations
+- **Recommended Fix:** Add to `token-lending/program/Cargo.toml`:
+  ```toml
+  [profile.release]
+  overflow-checks = true
+  ```
 
-```rust
-pub(crate) fn unlock_quote_lots(&mut self, quote_lots: QuoteLots) {
-    self.quote_lots_locked -= quote_lots;  // Raw subtraction
-    self.quote_lots_free += quote_lots;     // Raw addition
-}
-```
+### Finding PF-02: Switchboard V1 `FastRoundResultAccountData` — No Staleness Check (HIGH)
 
-The `Sub` implementation for `QuoteLots` uses raw `self.inner - other.inner`:
+- **Severity:** HIGH
+- **File:** `token-lending/program/src/processor.rs:2407-2409`
+- **Description:** When the Switchboard V1 oracle account type is `TYPE_AGGREGATOR_RESULT_PARSE_OPTIMIZED`, the code deserializes with `.unwrap()` and returns the price **without any staleness check**. Compare with the `TYPE_AGGREGATOR` branch which validates `round_open_slot` against `STALE_AFTER_SLOTS_ELAPSED`.
+- **Impact:** An attacker could use a stale (outdated) oracle price to borrow at an inflated collateral value or liquidate positions at incorrect prices, draining protocol funds.
+- **PoC Steps:**
+  1. Create a reserve configured with a Switchboard V1 oracle of type `TYPE_AGGREGATOR_RESULT_PARSE_OPTIMIZED`
+  2. Wait for the oracle price to become stale (>240 slots without update)
+  3. Use the stale price to borrow/liquidate at advantageous rates
+- **Recommended Fix:** Add staleness validation for the `FastRoundResultAccountData` path:
+  ```rust
+  let feed_data = FastRoundResultAccountData::deserialize(&account_buf)
+      .map_err(|_| ProgramError::InvalidAccountData)?;
+  // Add staleness check similar to TYPE_AGGREGATOR branch
+  if clock.slot.saturating_sub(feed_data.round_open_slot) >= STALE_AFTER_SLOTS_ELAPSED {
+      msg!("Oracle price is stale");
+      return Err(LendingError::InvalidOracleConfig.into());
+  }
+  ```
 
-```rust
-impl Sub for $type_name {
-    fn sub(self, other: Self) -> Self {
-        $type_name::new(self.inner - other.inner)  // No checked_sub
-    }
-}
-```
+### Finding PF-03: Unchecked `.unwrap()` on Oracle Deserialization (MEDIUM)
 
-**Mitigation:** Phoenix has `overflow-checks = true` in `Cargo.toml`, which means arithmetic overflow panics instead of wrapping. This converts a potential silent corruption into a transaction revert. However, this could still be used for denial-of-service if an attacker can trigger the underflow condition.
+- **Severity:** MEDIUM
+- **File:** `token-lending/program/src/processor.rs:2406`
+- **Description:** `FastRoundResultAccountData::deserialize(&account_buf).unwrap()` will panic and abort the transaction if the data is malformed. While this doesn't lose funds directly, it can be used to grief the protocol by causing oracle-dependent operations to fail.
+- **Impact:** Denial of service on any instruction that refreshes reserves using a corrupted or crafted Switchboard V1 account.
+- **Recommended Fix:** Replace `.unwrap()` with proper error handling:
+  ```rust
+  let feed_data = FastRoundResultAccountData::deserialize(&account_buf)
+      .map_err(|_| ProgramError::InvalidAccountData)?;
+  ```
 
-**Recommendation:** Replace raw arithmetic with `checked_sub` / `saturating_sub` for explicit error handling.
+### Finding PF-04: Switchboard V2 `mantissa as u128` Cast of Potentially Negative Value (MEDIUM)
 
-### Finding 3: OpenBook v2 — Oracle Staleness Edge Case
+- **Severity:** MEDIUM
+- **File:** `token-lending/program/src/processor.rs:2441`
+- **Description:** The code checks `price_switchboard_desc.mantissa < 0` and errors, but then casts `mantissa as u128`. While the negative check protects against negative prices, the `as u128` cast of a negative `i128` would silently produce a very large number if the check were somehow bypassed (e.g., via a race or code refactor).
+- **Impact:** If the negative check is ever removed or bypassed, a negative mantissa would become an astronomically large price, enabling massive over-borrowing.
+- **Recommended Fix:** Use `u128::try_from(price_switchboard_desc.mantissa)` with proper error handling instead of `as u128`.
 
-**File:** `programs/openbook-v2/src/state/oracle.rs`
+### Finding PF-05: Flash Loan Receiver Program Not Validated Against Allowlist (LOW)
 
-The oracle staleness check uses `saturating_add`:
+- **Severity:** LOW  
+- **File:** `token-lending/program/src/processor.rs:1951`
+- **Description:** The flash loan only checks that the receiver program is not the lending program itself. Any arbitrary program can be called as the flash loan receiver. While the balance check after CPI ensures funds are returned, reentrancy or unexpected side effects from arbitrary CPI are possible.
+- **Impact:** Potential for complex attack vectors involving reentrancy through arbitrary flash loan receivers.
+- **Recommended Fix:** Consider adding an allowlist for flash loan receiver programs, or implement a reentrancy guard.
 
-```rust
-pub fn is_stale(&self, oracle_pk: &Pubkey, config: &OracleConfig, now_slot: u64) -> bool {
-    if config.max_staleness_slots >= 0
-        && self.last_update_slot.saturating_add(config.max_staleness_slots as u64) < now_slot
-```
+### Finding PF-06: `checked_pow` Unwrap in Switchboard V2 Price Calculation (LOW)
 
-When `max_staleness_slots` is -1 (disabled), staleness is never checked. Markets that don't configure staleness bounds are vulnerable to stale oracle prices. An attacker could potentially:
-
-1. Wait for an oracle to go stale
-2. Execute trades at the stale price
-3. Profit from the price discrepancy
-
-**Recommendation:** Consider enforcing a maximum staleness even when the config is set to -1, or log a warning when staleness checking is disabled for markets with significant TVL.
-
-### Finding 5: Saber Stable-Swap — Missing Overflow Checks
-
-**File:** `Cargo.toml` (all workspace members)
-**Severity:** Medium
-
-No `overflow-checks = true` in any release profile across the workspace. While the Saber codebase extensively uses `checked_*` operations for arithmetic, any missed raw arithmetic operation would silently wrap in release mode.
-
-**Fix (PR-ready):**
-
-```toml
-[profile.release]
-overflow-checks = true
-```
-
-**Impact:** Defense-in-depth. Even though the code uses checked operations, this ensures any overlooked raw arithmetic would panic rather than silently produce incorrect results.
-
-### Finding 6: Saber — mul_div_imbalanced Boundary Condition
-
-**File:** `stable-swap-math/src/math.rs`
-
-```rust
-pub fn mul_div_imbalanced(a: u64, b: u64, c: u64) -> Option<u64> {
-    if a > MAX_BIG || b > MAX_SMALL {
-        (a as u128).checked_mul(b as u128)?.checked_div(c as u128)?.to_u64()
-    } else {
-        a.checked_mul(b)?.checked_div(c)
-    }
-}
-```
-
-At the boundary where `a = MAX_BIG` (2^48) and `b = MAX_SMALL` (2^16), the condition `a > MAX_BIG || b > MAX_SMALL` is false, so it takes the u64 path. But `MAX_BIG * MAX_SMALL = 2^64`, which overflows u64.
-
-**Impact:** Low — `checked_mul` returns `None`, which propagates correctly via `?`. However, this causes unnecessary transaction failures at the boundary that the u128 path would handle correctly.
-
-**Fix:**
-```rust
-if a >= MAX_BIG || b >= MAX_SMALL {
-```
+- **Severity:** LOW
+- **File:** `token-lending/program/src/processor.rs:2442`
+- **Description:** `(10u128).checked_pow(price_switchboard_desc.scale).unwrap()` — if `scale` is maliciously large, `checked_pow` returns `None` and the unwrap panics.
+- **Impact:** DoS — any reserve using a Switchboard V2 oracle with crafted scale value would be unable to refresh.
+- **Recommended Fix:** Handle the `None` case: `.ok_or(LendingError::MathOverflow)?`
 
 ---
 
-## Methodology
+## Target 2: Marinade Liquid Staking
 
-1. **Automated scanning:** cargo audit, clippy, grep for common vulnerability patterns
-2. **Architecture review:** Understand account validation, signer checks, PDA derivation
-3. **Arithmetic analysis:** Check for unchecked arithmetic, integer overflow/underflow
-4. **Oracle review:** Staleness, confidence intervals, manipulation resistance
-5. **Access control:** Admin functions, authority validation, upgrade paths
-6. **Economic analysis:** Fee calculation, slippage protection, sandwich attack resistance
+Repository: https://github.com/marinade-finance/liquid-staking-program
 
-## Tools Used
-- cargo clippy (static analysis)
-- Manual code review
-- Custom grep patterns for Solana vulnerability classes
+### Finding MN-01: `unsafe MaybeUninit::zeroed().assume_init()` for Size Calculation (LOW)
+
+- **Severity:** LOW
+- **File:** `programs/marinade-finance/src/state/mod.rs:119`
+- **Description:** Uses `unsafe { MaybeUninit::<Self>::zeroed().assume_init() }` to create a zeroed `State` struct for serialization length calculation. While zeroed memory is valid for this struct (all numeric fields), this pattern is fragile — adding a non-zero-safe field (e.g., `NonZeroU64`, `Option<NonNull<T>>`) would be UB.
+- **Impact:** Currently safe but a maintenance hazard. Future struct changes could introduce undefined behavior.
+- **Recommended Fix:** Use `State::default()` or a const-initialized default instead of unsafe zeroed memory.
+
+### Finding MN-02: Fee Calculation Truncation Favors Protocol (INFO)
+
+- **Severity:** INFORMATIONAL
+- **File:** `programs/marinade-finance/src/state/fee.rs:45,111`
+- **Description:** `Fee::apply()` and `FeeCents::apply()` use integer division which truncates toward zero. For `apply()`: `(lamports as u128 * basis_points as u128 / 10_000u128) as u64`. The truncation always rounds fees down, which slightly favors users over the protocol. The `as u64` final cast is safe because the result is always ≤ input lamports.
+- **Impact:** Negligible — rounding is consistent and bounded. No exploit vector.
+
+### Finding MN-03: Proportional Calculation — Division Before Multiplication Pattern (INFO)
+
+- **Severity:** INFORMATIONAL
+- **File:** `programs/marinade-finance/src/calc.rs:15`
+- **Description:** `proportional()` computes `(amount * numerator) / denominator` using u128 intermediates. When `denominator == 0`, it returns `amount` directly — this is an intentional design choice for first-mint scenarios but should be documented clearly.
+- **Impact:** The zero-denominator handling is correct for share price calculation (first mint gets 1:1). No vulnerability.
 
 ---
 
-## About the Auditor
+## Positive Security Observations
 
-This audit was performed by **Max**, an AI agent, as part of the Superteam Earn bounty program. The analysis covers common Solana vulnerability classes including:
-- Arithmetic overflow/underflow
-- Missing account validation
-- Oracle manipulation
-- Access control bypass
-- CPI reentrancy
-- PDA confusion
+### Marinade Finance
+- ✅ `overflow-checks = true` in Cargo.toml release profile
+- ✅ Anchor framework with `has_one`, `Signer<'info>` constraints throughout
+- ✅ Comprehensive owner/authority validation in `checks.rs`
+- ✅ Stake amount and validator checks before operations
+- ✅ Delegate authority properly validated in `check_token_source_account`
+
+### Port Finance
+- ✅ Program owner checks on all account unpacking
+- ✅ Signer checks on market owner and obligation owner operations
+- ✅ Reinitialization protection via `assert_uninitialized`
+- ✅ Staleness checks on reserves and obligations
+- ✅ PDA authority derivation validated in all CPI paths
+- ✅ Flash loan balance verification after CPI
 
 ---
 
-*Audit completed: February 2026*
+## Summary Table
 
-## Fix PRs
-
-### Saber Stable-Swap
-- **Branch:** `0xksure/stable-swap:fix/overflow-checks-and-boundary`
-- **Fixes:** overflow-checks + mul_div_imbalanced boundary
-- **GitHub:** https://github.com/0xksure/stable-swap/tree/fix/overflow-checks-and-boundary
-- **Note:** PR to upstream requires repo-level access; fix branch available for review
-
+| ID | Protocol | Severity | Description |
+|----|----------|----------|-------------|
+| PF-01 | Port Finance | HIGH | Missing overflow-checks in release profile |
+| PF-02 | Port Finance | HIGH | Switchboard V1 FastRound no staleness check |
+| PF-03 | Port Finance | MEDIUM | Unwrap on oracle deserialization |
+| PF-04 | Port Finance | MEDIUM | Unsafe `as u128` cast of signed mantissa |
+| PF-05 | Port Finance | LOW | Flash loan receiver not allowlisted |
+| PF-06 | Port Finance | LOW | `checked_pow` unwrap on oracle scale |
+| MN-01 | Marinade | LOW | Unsafe MaybeUninit for size calc |
+| MN-02 | Marinade | INFO | Fee truncation direction |
+| MN-03 | Marinade | INFO | Proportional zero-denominator behavior |
