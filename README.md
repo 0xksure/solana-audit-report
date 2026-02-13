@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-Comprehensive security audit of 5 Solana DeFi protocols, focusing on arithmetic safety, access control, oracle handling, and common vulnerability patterns. Found **17 findings** across all targets — including 2 HIGH severity issues in Port Finance related to missing overflow protection and oracle staleness validation.
+Comprehensive security audit of **6 Solana DeFi protocols**, focusing on arithmetic safety, access control, oracle handling, and common vulnerability patterns. Identified **20 findings** across all targets — including 3 HIGH severity issues: missing overflow protection and oracle staleness bypass in Port Finance, and unsafe integer casts in OpenBook v2.
 
 ### Severity Distribution
 
@@ -16,9 +16,9 @@ Comprehensive security audit of 5 Solana DeFi protocols, focusing on arithmetic 
 |----------|-------|
 | HIGH | 3 |
 | MEDIUM | 5 |
-| LOW | 6 |
+| LOW | 7 |
 | Informational | 5 |
-| **Total** | **19** |
+| **Total** | **20** |
 
 ### Repos Audited
 
@@ -29,7 +29,7 @@ Comprehensive security audit of 5 Solana DeFi protocols, focusing on arithmetic 
 | OpenBook v2 | [openbook-v2](https://github.com/openbook-dex/openbook-v2) | DEX/Orderbook | ~300 |
 | Saber Stable-Swap | [stable-swap](https://github.com/saber-hq/stable-swap) | AMM | ~200 |
 | Raydium CLMM | [raydium-clmm](https://github.com/raydium-io/raydium-clmm) | AMM | ~300 |
-| Pump.fun SDK | [pumpfun-rs](https://github.com/pumpfun/pumpfun-rs) | Bonding Curve | ~200 |
+| Pump.fun SDK | [pumpfun-rs](https://github.com/pumpfun/pumpfun-rs) | Bonding Curve SDK | ~200 |
 
 ---
 
@@ -165,14 +165,14 @@ Comprehensive security audit of 5 Solana DeFi protocols, focusing on arithmetic 
 
 ### PUMP.FUN Client SDK
 
-#### [PF-07] Division by Zero in `get_buy_out_price` — MEDIUM
+#### [PP-01] Division by Zero in `get_buy_out_price` — MEDIUM
 
 - **File:** `src/accounts/bonding_curve.rs` — `get_buy_out_price()`
 - **Description:** When `amount >= virtual_token_reserves` (via the `sol_tokens` variable), the denominator `virtual_token_reserves - sol_tokens` becomes zero or underflows. Since these are unsigned integers, underflow wraps to `u64::MAX`, producing a near-zero result instead of panicking.
 - **Impact:** Client-side miscalculation — returns ~0 SOL for what should be a very expensive buyout. Could lead to setting `max_sol_cost` too low, causing transaction failure, or in a UI context, displaying incorrect prices.
 - **Fix:** Add check: `if sol_tokens >= self.virtual_token_reserves { return special_case; }`.
 
-#### [PF-08] Unchecked `as u64` Truncation from u128 — LOW
+#### [PP-02] Unchecked `as u64` Truncation from u128 — LOW
 
 - **File:** `src/accounts/bonding_curve.rs` — `get_buy_price()`, `get_sell_price()`, `get_market_cap_sol()`, `get_buy_out_price()`
 - **Description:** Multiple `as u64` casts from u128 without overflow checks. While the bonding curve math typically keeps results within u64 range, edge cases with extreme reserves could silently truncate.
