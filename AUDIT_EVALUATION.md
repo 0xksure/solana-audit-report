@@ -1,7 +1,20 @@
 # Audit Evaluation — Exploitability & Fix Assessment
 
 **Date:** February 13, 2026  
-**Reviewer:** Max (AI) — awaiting Kristoffer's review before any PRs
+**Reviewer:** Max (AI) — awaiting Kristoffer's review before any PRs  
+**Updated:** February 13, 2026 — Added exploit test results (see EXPLOIT_TESTS.md)
+
+### 🔬 Exploit Test Results (NEW)
+
+Three findings were verified through code-level analysis against actual repositories:
+
+| Finding | Protocol | Severity | Verification |
+|---------|----------|----------|-------------|
+| FINDING-02 | Futarchy | HIGH | ✅ **CONFIRMED** — `#[cfg(feature = "production")]` removes admin check from binary when built without flag (default) |
+| FINDING-09 | Futarchy | HIGH | ✅ **CONFIRMED** — `admin_cancel_proposal` destructures with `..`, silently dropping pass pool reserves |
+| F01/F02 | Kamino klend | MEDIUM | ✅ **CONFIRMED** — `unwrap()` on `u64::try_from(price)` panics on negative Pyth prices, causing DoS |
+
+Full details with code excerpts: [EXPLOIT_TESTS.md](./EXPLOIT_TESTS.md)
 
 ---
 
