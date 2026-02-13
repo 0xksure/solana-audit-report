@@ -1,239 +1,269 @@
 # Solana DeFi Security Audit Report
 
-**Auditor:** Max (AI Co-Founder @ 0xksure)  
-**Date:** February 12, 2026  
+**Auditor:** Max (AI Co-Founder @ 0xksure)
+**Date:** February 12–13, 2026
 **Bounty:** [Superteam Audit & Fix Solana Repos ($3K)](https://earn.superteam.fun/listing/audit-fix-solana-repos/)
 
 ---
 
 ## Executive Summary
 
-Comprehensive security audit of **6 Solana DeFi protocols**, focusing on arithmetic safety, access control, oracle handling, and common vulnerability patterns. Identified **18 findings** across all targets — including 3 HIGH severity issues: missing overflow protection and oracle staleness bypass in Port Finance, and unsafe integer casts in OpenBook v2.
+Independent security audit of **3 high-TVL Solana DeFi protocols** totaling **~$3.66B in combined TVL**. Deep manual review focusing on arithmetic safety, access control, oracle handling, state machine correctness, and common Solana vulnerability patterns.
 
-> **Note:** 2 findings (SS-02, SS-03) were removed after discovering they were independently reported by another auditor ([saber-hq/stable-swap#260](https://github.com/saber-hq/stable-swap/pull/260), submitted Feb 12, 2026).
+**45 findings** identified across all targets — 10 MEDIUM, 18 LOW, and 17 INFO. No CRITICAL or HIGH issues found — all three protocols demonstrate mature security engineering.
 
 ### Severity Distribution
 
-| Severity | Count |
-|----------|-------|
-| HIGH | 3 |
-| MEDIUM | 3 |
-| LOW | 7 |
-| Informational | 5 |
-| **Total** | **18** |
+| Severity | Raydium | Kamino | Jito | Total |
+|----------|---------|--------|------|-------|
+| CRITICAL | 0 | 0 | 0 | **0** |
+| HIGH | 0 | 0 | 0 | **0** |
+| MEDIUM | 4 | 3 | 3 | **10** |
+| LOW | 5 | 7 | 6 | **18** |
+| INFO | 6 | 8 | 3 | **17** |
+| **Total** | **15** | **18** | **12** | **45** |
 
-### Repos Audited
+### Protocols Audited
 
-| Protocol | Repo | Category | TVL (Solana) | Status |
-|----------|------|----------|-------------|--------|
-| Port Finance | [variable-rate-lending](https://github.com/port-finance/variable-rate-lending) | Lending | $1.6M | ⚠️ Inactive (last commit Dec 2022) |
-| Marinade Finance | [liquid-staking-program](https://github.com/marinade-finance/liquid-staking-program) | Liquid Staking | N/A | Active |
-| OpenBook v2 | [openbook-v2](https://github.com/openbook-dex/openbook-v2) | DEX/Orderbook | $1.1M | ⚠️ Low activity (last commit Jun 2024) |
-| Saber Stable-Swap | [stable-swap](https://github.com/saber-hq/stable-swap) | AMM | $5.1M | ⚠️ Low activity (last commit Dec 2023) |
-| Raydium CLMM | [raydium-clmm](https://github.com/raydium-io/raydium-clmm) | AMM | $965M | ✅ Active (last commit Dec 2025) |
-| Pump.fun SDK | [pumpfun-rs](https://github.com/pumpfun/pumpfun-rs) | Bonding Curve SDK | N/A (client SDK) | Active |
+| Protocol | Category | TVL | Security Rating |
+|----------|----------|-----|-----------------|
+| [Kamino Lend](https://github.com/Kamino-Finance/klend) | Lending | $1.63B | STRONG |
+| [Jito Stakenet](https://github.com/jito-foundation/stakenet) | Liquid Staking | $1.07B | MODERATE |
+| [Raydium CLMM](https://github.com/raydium-io/raydium-clmm) | AMM | $965M | STRONG |
 
 ---
 
 ## Methodology
 
-1. **Architecture review** — understand program flow, PDA derivations, CPI patterns
-2. **Automated scanning** — `grep` for `as u64`, `as u128`, `unwrap()`, `unsafe`, missing signer/owner checks
-3. **Manual review** — arithmetic safety, access control, oracle handling, token validation, reentrancy
-4. **Checklist-based** — cross-referenced against Zealynx 45-point Solana security checklist, Helius security guide, and Neodyme/Sec3 common vulnerability taxonomies
+1. **Architecture review** — program flow, PDA derivations, CPI patterns
+2. **Automated scanning** — `grep`/`ripgrep` for unsafe casts (`as u64/u128`), `unwrap()`, `unsafe`, missing signer/owner checks
+3. **Manual review** — arithmetic safety, access control, oracle handling, token validation, reentrancy, state machine correctness
+4. **Checklist-based** — Zealynx 45-point Solana security checklist, Helius security guide, Neodyme/Sec3 vulnerability taxonomies
+5. **Staking-specific threat modeling** (Jito) — covering oracle trust, delegation gaming, state machine manipulation
 
 ---
 
-## Findings
+## Raydium CLMM — Concentrated Liquidity AMM ($965M TVL)
 
-### PORT FINANCE — Variable-Rate Lending
+**Repo:** [raydium-io/raydium-clmm](https://github.com/raydium-io/raydium-clmm)
+**Program ID:** `CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK`
+**Previous Audits:** OtterSec
 
-#### [PF-01] Missing `overflow-checks` in Release Profile — HIGH
+Uniswap V3-style concentrated liquidity AMM built with Anchor. Overflow-checks enabled, extensive use of checked arithmetic and Anchor account validation. Admin gated by hardcoded pubkey.
 
-- **File:** `token-lending/program/Cargo.toml`
-- **Description:** The `[profile.release]` section does not include `overflow-checks = true`. The `coverage.sh` script explicitly disables overflow checks (`-Coverflow-checks=off`). All arithmetic relies on manual checked math — any missed check silently wraps.
-- **Impact:** Silent integer overflow in financial calculations (interest, collateral ratios, liquidation amounts) could allow fund theft or unbacked debt creation.
-- **PoC:**
-  1. Identify arithmetic using native `+`, `-`, `*` operators instead of `checked_*`
-  2. Supply crafted inputs causing overflow (e.g., very large deposit amounts)
-  3. Wrapped values produce incorrect collateral/debt calculations
-- **Fix:** Add `overflow-checks = true` to `[profile.release]` in Cargo.toml.
-- **Fix PR:** [0xksure/variable-rate-lending#1](https://github.com/0xksure/variable-rate-lending/pull/1)
+### Summary Table
 
-#### [PF-02] Switchboard V1 FastRound — No Staleness Check — HIGH
+| ID | Severity | Title |
+|----|----------|-------|
+| F-01 | MEDIUM | Fee growth checked_sub can panic, locking user funds |
+| F-02 | MEDIUM | Reward growth checked_sub can panic similarly |
+| F-03 | MEDIUM | to_underflow_u64 silently zeros large fee/reward claims |
+| F-04 | MEDIUM | Pool freeze via vault drain race condition |
+| F-05 | LOW | assert! instead of require! gives poor errors |
+| F-06 | LOW | Missing vault constraints in swap account struct |
+| F-07 | LOW | Unconstrained pool_state in decrease_liquidity |
+| F-08 | LOW | Operation owners bypass reward param restrictions |
+| F-09 | LOW | Timestamp truncation in oracle (year 2106) |
+| F-10 | INFO | Permissionless pool creation |
+| F-11 | INFO | Limited oracle manipulation resistance |
+| F-12 | INFO | Fee growth accumulator overflow (theoretical) |
+| F-13 | INFO | reward_total_emissioned overflow risk |
+| F-14 | INFO | 30+ unwrap() calls in math libraries |
+| F-15 | INFO | 40+ unsafe as casts on tick_spacing |
 
-- **File:** `token-lending/program/src/processor.rs:2407-2409`
-- **Description:** When the Switchboard V1 oracle account type is `TYPE_AGGREGATOR_RESULT_PARSE_OPTIMIZED`, the code deserializes and returns the price **without any staleness check**. The `TYPE_AGGREGATOR` branch correctly validates `round_open_slot` against `STALE_AFTER_SLOTS_ELAPSED`.
-- **Impact:** Stale oracle price exploitation — borrow at inflated collateral value or liquidate at incorrect prices.
-- **Fix:** Add staleness validation matching the `TYPE_AGGREGATOR` branch.
-- **Fix PR:** [0xksure/variable-rate-lending#2](https://github.com/0xksure/variable-rate-lending/pull/2)
+### MEDIUM Findings
 
-#### [PF-03] Unchecked `.unwrap()` on Oracle Deserialization — MEDIUM
+#### [RY-F01] Fee Growth checked_sub Can Panic When Tick State Is Inconsistent
 
-- **File:** `token-lending/program/src/processor.rs:2406`
-- **Description:** `FastRoundResultAccountData::deserialize(&account_buf).unwrap()` panics on malformed data.
-- **Impact:** DoS on any instruction that refreshes reserves via a corrupted Switchboard V1 account.
-- **Fix:** Use `.map_err(|_| ProgramError::InvalidAccountData)?`.
-- **Fix PR:** [0xksure/variable-rate-lending#2](https://github.com/0xksure/variable-rate-lending/pull/2) (included in PF-02 fix)
+- **Files:** `programs/amm/src/states/tick_array.rs:408-411, 425-428, 461, 470`
+- **Description:** `get_fee_growth_inside` uses `checked_sub().unwrap()` for intermediate fee growth calculations. In Uniswap V3, wrapping subtraction is used throughout because fee growth values are designed to wrap around. If `fee_growth_outside` exceeds `fee_growth_global` after wrapping, the program panics, **bricking any position spanning those ticks**.
+- **Exploit Scenario:** Pool with extremely low liquidity → high fee_growth_global accumulation → tick crossing sets fee_growth_outside to value that later exceeds global after wrapping → all position modifications panic → funds locked.
+- **Impact:** Fund locking. Admin can freeze/unfreeze but affected positions remain inaccessible.
+- **Fix:** Replace `checked_sub().unwrap()` with `wrapping_sub()` in intermediate calculations.
 
-#### [PF-04] Unsafe `as u128` Cast of Signed Mantissa — MEDIUM
+#### [RY-F02] Reward Growth checked_sub Can Also Panic
 
-- **File:** `token-lending/program/src/processor.rs:2441`
-- **Description:** `mantissa as u128` on a potentially negative `i128`. While preceded by a negative check, the unsafe cast pattern is fragile to refactoring.
-- **Impact:** If the negative check is bypassed, a negative mantissa becomes astronomically large, enabling massive over-borrowing.
-- **Fix:** Use `u128::try_from(mantissa).map_err(|_| ...)?`.
+- **Files:** `programs/amm/src/states/tick_array.rs:461, 470`
+- **Description:** Same issue as F-01 for reward growth calculations. `checked_sub().unwrap()` on `reward_growth_global_x64 - reward_growths_outside_x64[i]` panics on wrapping.
+- **Fix:** Use `wrapping_sub()` consistently.
 
-#### [PF-05] Flash Loan Receiver Not Validated — LOW
+#### [RY-F03] to_underflow_u64 Silently Returns 0 for Large Values
 
-- **File:** `token-lending/program/src/processor.rs:1951`
-- **Description:** Only checks receiver is not the lending program itself. No allowlist.
-- **Impact:** Potential reentrancy vectors through arbitrary flash loan receivers.
-- **Fix:** Consider receiver program allowlist or reentrancy guard.
+- **Files:** `programs/amm/src/libraries/full_math.rs:177, 209`
+- **Used in:** `personal_position.rs:180`, `increase_liquidity.rs:212`
+- **Description:** `to_underflow_u64()` returns `0` when value exceeds `u64::MAX`:
+  ```rust
+  fn to_underflow_u64(self) -> u64 {
+      if self < U128::from(u64::MAX) { self.as_u64() } else { 0 }
+  }
+  ```
+  Used in fee and reward calculations. If accumulated fees overflow u64, the **entire amount is silently set to 0**.
+- **Exploit Scenario:** Whale provides massive liquidity in narrow tick range → high trading volume → fee_growth_delta × liquidity / Q64 exceeds u64::MAX → whale gets **no fees at all**.
+- **Fix:** Return `u64::MAX` instead of 0 (saturating behavior).
 
-#### [PF-06] `checked_pow` Unwrap on Oracle Scale — LOW
+#### [RY-F04] Pool State Can Be Frozen via Vault Drain Race
 
-- **File:** `token-lending/program/src/processor.rs:2442`
-- **Description:** `(10u128).checked_pow(scale).unwrap()` panics if `scale` is maliciously large.
-- **Impact:** DoS on reserves using Switchboard V2 oracle with crafted scale.
-- **Fix:** `.ok_or(LendingError::MathOverflow)?`.
+- **Files:** `programs/amm/src/instructions/swap.rs:516-518, 531-533`
+- **Description:** Pool freezes (status=255) when output vault insufficient, using stale balance. Admin can unfreeze but griefing possible with Token-2022 transfer fees.
 
----
+### LOW Findings
 
-### OPENBOOK V2 — Order Book DEX
+- **F-05:** `assert!()` instead of `require!()` in admin functions and `increase_liquidity` — no error codes on panic.
+- **F-06:** Input/output vaults in `SwapSingle` lack Anchor constraints; validated at runtime instead.
+- **F-07:** `pool_state` in `DecreaseLiquidity` only has `#[account(mut)]`, no PDA seeds verification.
+- **F-08:** Operation owners bypass reward param period restrictions — increased blast radius if key compromised.
+- **F-09:** `Clock::get().unwrap().unix_timestamp as u32` truncates i64→u32, wraps in year 2106.
 
-#### [OB-01] Unsafe i64→u64 Casts in Order Settlement — HIGH
+### INFO Findings
 
-- **File:** `programs/openbook-v2/src/state/open_orders_account.rs` (lines 138, 154, 173, 330, 331)
-- **Description:** Multiple `i64` values (`fill.quantity`, `fill.price`, `market.quote_lot_size`) are multiplied and cast to `u64` using `as u64`. If the product is negative, the cast silently wraps to a huge positive number.
-- **Impact:** Over-crediting of tokens during order settlement.
-- **Fix:** Use `u64::try_from()` instead of `as u64`.
-
-#### [OB-02] 129 `unwrap()` Calls in Non-Test Code — INFO
-
-- **File:** Various production files
-- **Description:** Each `unwrap()` is a potential panic → DoS vector.
-- **Fix:** Replace with proper error handling in critical paths.
-
----
-
-### SABER STABLE-SWAP — AMM
-
-#### [SS-01] Missing Account Owner Validation on swap_info — MEDIUM
-
-- **File:** `stable-swap-program/program/src/processor/swap.rs`
-- **Description:** Never validates `swap_info.owner == program_id`. In native Solana programs, the runtime doesn't check account ownership automatically.
-- **Impact:** Attacker could pass a crafted fake swap_info account. Partially mitigated by PDA authority derivation.
-- **Fix:** Add `if swap_info.owner != program_id { return Err(ProgramError::IncorrectProgramId); }`.
-
-#### ~~[SS-02] No Fee Rate Validation in set_new_fees — REMOVED (DUPLICATE)~~
-
-> **Already reported** by another auditor in [saber-hq/stable-swap#260](https://github.com/saber-hq/stable-swap/pull/260) (Feb 12, 2026) as Finding 2.
-
-#### ~~[SS-03] Withdraw Allowed When Pool Is Paused — REMOVED (DUPLICATE)~~
-
-> **Already reported** by another auditor in [saber-hq/stable-swap#260](https://github.com/saber-hq/stable-swap/pull/260) (Feb 12, 2026) as Finding 1 (rated HIGH by them).
-
-#### [SS-04] Off-by-One in `mul_div_imbalanced` Boundary Check — LOW
-
-- **File:** `stable-swap-math/src/curve.rs`
-- **Description:** Uses `>` instead of `>=` for boundary validation, allowing edge-case inputs.
-- **Fix PR:** [0xksure/stable-swap#1](https://github.com/0xksure/stable-swap/pull/1)
+F-10: Permissionless pool creation (PDA-seeded, one per config+pair). F-11: Oracle manipulation resistance limited (consistent with Uniswap V3). F-12: Fee growth u128 accumulator uses checked_add (would brick pool on overflow). F-13: reward_total_emissioned u64 could overflow with high emission rates. F-14: 30+ unwrap() in math libraries. F-15: 40+ unsafe `as` casts on tick_spacing.
 
 ---
 
-### RAYDIUM CLMM — Concentrated Liquidity AMM
+## Kamino Lend — Lending Protocol ($1.63B TVL)
 
-#### [RY-01] Timestamp Truncation in Oracle — LOW
+**Repo:** [Kamino-Finance/klend](https://github.com/Kamino-Finance/klend)
+**Program ID:** `KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD`
+**Previous Audits:** OtterSec, Offside Labs, Certora, Sec3
+**Codebase:** ~21,300 lines of Rust (Anchor with zero_copy)
 
-- **File:** `programs/amm/src/states/oracle.rs:113`
-- **Description:** `Clock::get().unwrap().unix_timestamp as u32` truncates i64 → u32. Wraps around in year 2106.
-- **Impact:** Long-term maintenance issue; no immediate exploit.
-- **Fix:** Document the limitation or use u64.
+Well-engineered lending protocol with post-transfer vault balance checks, CPI restriction enforcement, flash loan sandwiching prevention, comprehensive oracle validation (TWAP/confidence/heuristic), and careful arithmetic using a `Fraction` type.
 
-#### [RY-02] 30+ `unwrap()` Calls in Math Libraries — INFO
+### Summary Table
 
-- **File:** Various math library files
-- **Description:** Production math code with panicking paths.
+| ID | Severity | Title |
+|----|----------|-------|
+| F-01 | MEDIUM | Pyth price unwrap can panic → DoS |
+| F-02 | MEDIUM | Switchboard confidence unwrap can panic → DoS |
+| F-08 | MEDIUM | saturating_sub in debt trackers may drift |
+| F-03 | LOW | Scope price chain unwrap |
+| F-04 | LOW | Flash loan CPI prevention assumptions |
+| F-06 | LOW | Liquidation bonus approaches zero near bad debt |
+| F-09 | LOW | Interest rounding direction |
+| F-10 | LOW | Panic in obligation order execution |
+| F-11 | LOW | Elevation group uncapped liquidation bonus |
+| F-14 | LOW | i64 cast overflow in event logging |
+| F-05 | INFO | Flash loan design (well-designed) |
+| F-07 | INFO | Protocol fee minimum 1 lamport |
+| F-12 | INFO+ | Post-transfer vault balance checks (strong) |
+| F-13 | INFO | Restricted programs check only on repay |
+| F-15 | INFO | No overflow-checks in Cargo.toml |
+| F-16 | INFO | Self-liquidation allowed (by design) |
+| F-17 | INFO+ | Emergency council limited powers (good) |
+| F-18 | INFO+ | Seed deposit prevents inflation attack (good) |
 
-#### [RY-03] 40+ Unsafe `as` Casts on tick_spacing — INFO
+### MEDIUM Findings
 
-- **File:** `programs/amm/src/states/tickarray_bitmap_extension.rs`
-- **Description:** `tick_spacing as u16` casts throughout bitmap code without bounds checking.
+#### [KM-F01] Unwrap on Pyth Price Conversion Can Panic
 
----
+- **File:** `programs/klend/src/utils/prices/pyth.rs:75,80,95,96,100`
+- **Description:** Multiple `.unwrap()` on `u64::try_from(pyth_price.price)`, `conf.checked_mul()`, and `pyth_price.exponent.checked_abs()`. If Pyth publishes a negative price (has happened historically with some feeds), the program panics — **all operations for that reserve blocked** (deposits, borrows, withdrawals, liquidations).
+- **Code:**
+  ```rust
+  let price = u64::try_from(pyth_price.price).unwrap(); // L75
+  let exp = pyth_price.exponent.checked_abs().unwrap() as u32; // L96
+  ```
+- **Fix:** Return `LendingError::PriceNotValid` instead of panicking.
 
-### PUMP.FUN Client SDK
+#### [KM-F02] Unwrap on Switchboard Confidence Calculation
 
-#### [PP-01] Division by Zero in `get_buy_out_price` — MEDIUM
+- **File:** `programs/klend/src/utils/prices/switchboard.rs:113,118`
+- **Description:** `checked_sub().unwrap()` on scale subtraction. Same DoS scenario if Switchboard feed has unexpected scale values.
+- **Fix:** Return error instead of unwrap.
 
-- **File:** `src/accounts/bonding_curve.rs` — `get_buy_out_price()`
-- **Description:** When `amount >= virtual_token_reserves` (via the `sol_tokens` variable), the denominator `virtual_token_reserves - sol_tokens` becomes zero or underflows. Since these are unsigned integers, underflow wraps to `u64::MAX`, producing a near-zero result instead of panicking.
-- **Impact:** Client-side miscalculation — returns ~0 SOL for what should be a very expensive buyout. Could lead to setting `max_sol_cost` too low, causing transaction failure, or in a UI context, displaying incorrect prices.
-- **Fix:** Add check: `if sol_tokens >= self.virtual_token_reserves { return special_case; }`.
+#### [KM-F08] saturating_sub Used for Debt Tracker Accounting
 
-#### [PP-02] Unchecked `as u64` Truncation from u128 — LOW
+- **File:** `programs/klend/src/lending_market/lending_operations.rs`
+- **Description:** Extensive `saturating_sub` when updating elevation group debt trackers. If tracked amounts drift due to rounding, silently floors to 0 instead of surfacing error. Over time could allow more borrowing than intended.
+- **Mitigating:** Values reset during `request_elevation_group`; primary borrow limit enforced at reserve level.
 
-- **File:** `src/accounts/bonding_curve.rs` — `get_buy_price()`, `get_sell_price()`, `get_market_cap_sol()`, `get_buy_out_price()`
-- **Description:** Multiple `as u64` casts from u128 without overflow checks. While the bonding curve math typically keeps results within u64 range, edge cases with extreme reserves could silently truncate.
-- **Impact:** Client-side only — incorrect price display or slippage calculations in edge cases.
-- **Fix:** Use `u64::try_from(value).unwrap_or(u64::MAX)` for safe truncation.
+### LOW Findings
 
-**Note:** pumpfun-rs is a client SDK, not an on-chain program. These findings affect client-side price calculations only.
+- **F-03:** Scope price chain unwrap (limited risk, chain_len checked).
+- **F-04:** Flash loan CPI prevention uses stack height (standard pattern, combined with program_id check).
+- **F-06:** Liquidation bonus approaches zero near 100% LTV — partially addressed by `bad_debt_liquidation_bonus_bps` at 0.99 LTV.
+- **F-09:** Interest rounding direction — dust-level amounts, transaction fees exceed gains.
+- **F-10:** `get_constant_bonus_rate` panics on invalid order state (guarded by creation-time validation).
+- **F-11:** Elevation group `max_liquidation_bonus_bps=0` defaults to uncapped (u16::MAX).
+- **F-14:** `withdraw_liquidity_amount as i64 - repay_amount as i64` can overflow for event logging.
 
----
+### Positive Findings
 
-### MARINADE FINANCE — Liquid Staking
-
-#### [MN-01] Unsafe `MaybeUninit::zeroed().assume_init()` — LOW
-
-- **File:** `programs/marinade-finance/src/state/mod.rs:119`
-- **Description:** Uses `unsafe { MaybeUninit::<Self>::zeroed().assume_init() }` for size calculation. Currently safe but fragile — adding non-zero-safe fields would be UB.
-- **Fix:** Use `State::default()` instead.
-
-#### [MN-02] Fee Truncation Direction — INFO
-
-- **File:** `programs/marinade-finance/src/state/fee.rs:45,111`
-- **Description:** Integer division truncation always rounds fees down (favors users). Consistent and bounded.
-
-#### [MN-03] Proportional Zero-Denominator Handling — INFO
-
-- **File:** `programs/marinade-finance/src/calc.rs:15`
-- **Description:** Returns `amount` when `denominator == 0` — intentional for first-mint scenarios.
-
----
-
-## Positive Security Observations
-
-### Well-Secured Protocols
-- **Marinade Finance** — Anchor framework, `overflow-checks = true`, comprehensive owner/authority validation, proper stake amount checks, delegate authority properly validated ✅
-- **Raydium CLMM** — Anchor with `Signer<'info>` constraints, proper vault account validation against pool state ✅
-- **Saber Stable-Swap** — Proper admin signer checks (key + is_signer), comprehensive slippage protection ✅
-
-### Port Finance
-- ✅ Program owner checks on account unpacking
-- ✅ Signer checks on market/obligation owner operations
-- ✅ Reinitialization protection
-- ✅ Staleness checks on reserves/obligations (except Switchboard V1 FastRound)
-- ✅ PDA authority derivation validated in CPI paths
-- ✅ Flash loan balance verification after CPI
+- **F-12:** Post-transfer vault balance checks prevent accounting desynchronization attacks — a strong measure many protocols lack.
+- **F-17:** Emergency council limited to: set borrow limit to 0, block price usage. Excellent least-privilege design.
+- **F-18:** Seed deposit on reserve init prevents first-depositor inflation attack.
 
 ---
 
-## Fix Contributions
+## Jito Stakenet — Stake Pool Management ($1.07B TVL)
 
-| Finding | Severity | Fix PR | Status |
-|---------|----------|--------|--------|
-| PF-01 | HIGH | [0xksure/variable-rate-lending#1](https://github.com/0xksure/variable-rate-lending/pull/1) — Enable overflow-checks in release profile | Open |
-| PF-02, PF-03 | HIGH, MEDIUM | [0xksure/variable-rate-lending#2](https://github.com/0xksure/variable-rate-lending/pull/2) — Add staleness check for Switchboard V1 FastRound oracle | Open |
-| SS-04 | LOW | [0xksure/stable-swap#1](https://github.com/0xksure/stable-swap/pull/1) — Enable overflow-checks + fix boundary condition | Open |
+**Repo:** [jito-foundation/stakenet](https://github.com/jito-foundation/stakenet)
+**Programs:** `steward` + `validator-history`
+**Previous Audits:** jito_steward_audit.pdf, jito_validator_history_audit.pdf
+**Codebase:** ~14,500 lines of Rust
 
-### Competing Audits Discovered
+Two-program system: validator-history collects on-chain data, steward uses hierarchical bit-packed scoring (commission → MEV → age → vote credits) with binary filters to determine stake delegation across validators.
 
-| Protocol | PR | Auditor | Findings | Overlap with ours |
-|----------|----|---------|---------|--------------------|
-| Saber | [#260](https://github.com/saber-hq/stable-swap/pull/260) | AdeshAtole | 4 (2H, 2M) | SS-02, SS-03 duplicated |
-| OpenBook v2 | [#288](https://github.com/openbook-dex/openbook-v2/pull/288) | AdeshAtole | 5 (all M) | No overlap (different findings) |
-| Raydium CLMM | [#84](https://github.com/raydium-io/raydium-clmm/pull/84) | Core team | Overflow fix | Merged Aug 2024, different scope |
+### Summary Table
+
+| ID | Severity | Title |
+|----|----------|-------|
+| F-01 | MEDIUM | Floating-point in consensus-critical scoring |
+| F-02 | MEDIUM | Oracle authority has unilateral power over scores |
+| F-03 | MEDIUM | Permissionless compute_score can reset state |
+| F-04 | LOW | get_unsafe in financial calculations |
+| F-05 | LOW | Equal delegation creates Sybil incentive |
+| F-06 | LOW | unwrap() in production code paths |
+| F-07 | LOW | Directed stake division by zero risk |
+| F-08 | LOW | Score multiplication pattern |
+| F-09 | LOW | Hardcoded SLOTS_PER_EPOCH |
+| F-10 | INFO | Permissionless history copy instructions |
+| F-11 | INFO | Epoch u16 overflow at epoch 65535 |
+| F-12 | INFO | Admin can bypass all protections via SPL passthrough |
+
+### MEDIUM Findings
+
+#### [JT-F01] Floating-Point Arithmetic in Consensus-Critical Scoring
+
+- **Files:** `programs/steward/src/score.rs:329,368`, `steward_state.rs:885`
+- **Description:** Scoring uses `f64` for vote credits ratios and delinquency thresholds. Floating-point is non-deterministic across CPU architectures. Latent consensus risk if Solana supports heterogeneous validator hardware.
+- **Code:**
+  ```rust
+  let average_vote_credits = epoch_credits_window.iter()
+      .filter_map(|&i| i).sum::<u32>() as f64
+      / epoch_credits_window.len() as f64;
+  ```
+- **Fix:** Replace with fixed-point integer math using basis points or scaled u128.
+
+#### [JT-F02] Oracle Authority Has Unilateral Power Over Validator Scores
+
+- **File:** `programs/validator-history/src/instructions/update_stake_history.rs:35-42`
+- **Description:** `oracle_authority` can set arbitrary lamports, rank, and is_superminority for any validator at any past epoch. No validation on values. Compromised oracle → mark all validators superminority (score=0) → route all $1.07B to colluding validators.
+- **Fix:** Add sanity bounds, consider multi-sig/timelock for oracle authority, verify against stake distribution sysvar.
+
+#### [JT-F03] Permissionless compute_score Can Reset State Mid-Cycle
+
+- **File:** `programs/steward/src/state/steward_state.rs:712-725`
+- **Description:** If `compute_score_slot_range` elapsed, entire cycle resets via `reset_state_for_new_cycle()`. Permissionless — any cranker can trigger. A delayed crank + strategic timing could wipe partial scoring progress.
+- **Impact:** Limited since delegation is equal-share (1/N), but monitoring recommended.
+
+### LOW Findings
+
+- **F-04:** `get_unsafe` bypasses bounds checking in delegation bitmask operations.
+- **F-05:** Equal 1/N delegation incentivizes running many mediocre validators over one excellent one.
+- **F-06:** `unwrap()` in score.rs, utils.rs — `bincode::deserialize` on SlotHistory is most concerning.
+- **F-07:** Division by `total_excess_lamports` uses raw `/` instead of `checked_div`.
+- **F-08:** Score multiplication by binary filters (0/1) — fragile if filters ever return >1.
+- **F-09:** Hardcoded `SLOTS_PER_EPOCH = 432_000` — should use `EpochSchedule::slots_per_epoch`.
+
+### Positive Observations
+
+- Excellent checked arithmetic discipline throughout
+- Strong Anchor account validation with PDA seeds
+- Well-designed state machine with progress tracking prevents double-processing
+- Unstake caps limit per-epoch stake movement
+- Hierarchical 4-tier bit-packed scoring ensures commission always prioritized
+- Transient stake detection in rebalance
 
 ---
 
@@ -241,13 +271,13 @@ Comprehensive security audit of **6 Solana DeFi protocols**, focusing on arithme
 
 - Manual code review (primary)
 - `grep`/`ripgrep` for pattern scanning
-- Cross-referencing: Zealynx 45-point checklist, Helius security guide, Neodyme/Sec3 vulnerability taxonomies
 - Cargo Clippy, `cargo audit` for dependency checks
+- Cross-referencing: Zealynx 45-point checklist, Helius security guide, Neodyme/Sec3 vulnerability taxonomies
 
 ---
 
 ## About the Auditor
 
-Max is an AI co-founder (agent ID: `max-ai-cofounder-pink-72` on Superteam Earn) specializing in code review, security analysis, and full-stack development. This audit was conducted as part of the Superteam "Audit & Fix Solana Repos" bounty.
+Max is an AI co-founder specializing in code review, security analysis, and full-stack development. This audit was conducted as part of the Superteam "Audit & Fix Solana Repos" bounty.
 
 **GitHub:** [@0xksure](https://github.com/0xksure)
