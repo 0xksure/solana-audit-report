@@ -8,20 +8,20 @@
 
 ## Executive Summary
 
-Independent security audit of **3 high-TVL Solana DeFi protocols** totaling **~$3.66B in combined TVL**. Deep manual review focusing on arithmetic safety, access control, oracle handling, state machine correctness, and common Solana vulnerability patterns.
+Independent security audit of **5 high-TVL Solana DeFi protocols** totaling **~$4.7B+ in combined TVL**. Deep manual review focusing on arithmetic safety, access control, oracle handling, state machine correctness, and common Solana vulnerability patterns.
 
-**45 findings** identified across all targets — 10 MEDIUM, 18 LOW, and 17 INFO. No CRITICAL or HIGH issues found — all three protocols demonstrate mature security engineering.
+**74 findings** identified across all targets — 2 HIGH, 17 MEDIUM, 28 LOW, and 27 INFO. Two HIGH severity issues found in Futarchy/MetaDAO (admin bypass and accounting loss).
 
 ### Severity Distribution
 
-| Severity | Raydium | Kamino | Jito | Total |
-|----------|---------|--------|------|-------|
-| CRITICAL | 0 | 0 | 0 | **0** |
-| HIGH | 0 | 0 | 0 | **0** |
-| MEDIUM | 4 | 3 | 3 | **10** |
-| LOW | 5 | 7 | 6 | **18** |
-| INFO | 6 | 8 | 3 | **17** |
-| **Total** | **15** | **18** | **12** | **45** |
+| Severity | Raydium | Kamino | Jito | Futarchy | Sanctum | Total |
+|----------|---------|--------|------|----------|---------|-------|
+| CRITICAL | 0 | 0 | 0 | 0 | 0 | **0** |
+| HIGH | 0 | 0 | 0 | 2 | 0 | **2** |
+| MEDIUM | 4 | 3 | 3 | 5 | 3 | **17** |
+| LOW | 5 | 7 | 6 | 7 | 4 | **28** |
+| INFO | 6 | 8 | 3 | 6 | 4 | **27** |
+| **Total** | **15** | **18** | **12** | **20** | **11** | **74** |
 
 ### Protocols Audited
 
@@ -30,6 +30,8 @@ Independent security audit of **3 high-TVL Solana DeFi protocols** totaling **~$
 | [Kamino Lend](https://github.com/Kamino-Finance/klend) | Lending | $1.63B | STRONG |
 | [Jito Stakenet](https://github.com/jito-foundation/stakenet) | Liquid Staking | $1.07B | MODERATE |
 | [Raydium CLMM](https://github.com/raydium-io/raydium-clmm) | AMM | $965M | STRONG |
+| [Futarchy / MetaDAO](https://github.com/metaDAOproject/futarchy) | Prediction Markets | $12M | WEAK — 2 HIGH |
+| [Sanctum S Controller](https://github.com/igneous-labs/S) | LST AMM | $1.1B | STRONG |
 
 ---
 
@@ -264,6 +266,106 @@ Two-program system: validator-history collects on-chain data, steward uses hiera
 - Unstake caps limit per-epoch stake movement
 - Hierarchical 4-tier bit-packed scoring ensures commission always prioritized
 - Transient stake detection in rebalance
+
+---
+
+## Futarchy / MetaDAO — Prediction Market Governance ($12M TVL)
+
+**Repo:** [metaDAOproject/futarchy](https://github.com/metaDAOproject/futarchy)
+**Programs:** futarchy, conditional_vault, mint_governor, launchpad variants, bid_wall, performance packages
+
+Implements DAO decision-making through prediction markets. Core flow: proposals create pass/fail conditional markets; TWAP oracle determines outcomes. Custom constant-product AMM with embedded arbitrage.
+
+### Summary Table
+
+| ID | Severity | Title |
+|----|----------|-------|
+| F-02 | HIGH | Admin functions bypass in non-production mode |
+| F-09 | HIGH | admin_cancel_proposal drops pass pool reserves from accounting |
+| F-03 | MEDIUM | TWAP oracle manipulation via observation gap weighting |
+| F-04 | MEDIUM | Arbitrage functions use unwrap() — potential DoS |
+| F-05 | MEDIUM | Arbitrage profit i64 cast overflow |
+| F-08 | MEDIUM | TWAP aggregator wrapping produces incorrect TWAP |
+| F-10 | MEDIUM | Protocol fees in losing pool lost on finalization |
+| F-14 | MEDIUM | Missing re-execution prevention in execute_spending_limit_change |
+| F-06 | LOW | LP fee is 0% — lower manipulation cost |
+| F-12 | LOW | Flash loan vector (mitigated by TWAP rate limiting) |
+| F-13 | LOW | Position authority can be any key — permanent lock |
+| F-16 | LOW | Negative team threshold lowers bar for team proposals |
+| F-17 | LOW | update_dao can set unsafe parameters |
+| F-18 | LOW | Arbitrage grid search suboptimal, step_size=0 edge case |
+| F-20 | LOW | Minimum proposal duration vs TWAP manipulation window |
+| F-01 | INFO | Unstaking from non-draft proposals (by design) |
+| F-07 | INFO | Spot pool split rounding on launch |
+| F-11 | INFO | No reentrancy guard on Squads CPI (mitigated) |
+| F-15 | INFO | Stale balance check in conditional swap |
+| F-19 | INFO | Redemption truncation (negligible for binary) |
+| F-10n | INFO | finalize_proposal losing pool accounting correct for conditional tokens |
+
+### HIGH Findings
+
+#### [FT-F02] Admin Functions Bypass in Non-Production Mode
+
+- **Files:** `admin_remove_proposal.rs`, `admin_cancel_proposal.rs`, `admin_approve_execute_multisig_proposal.rs`, `collect_fees.rs`
+- **Description:** All admin functions use `#[cfg(feature = "production")]` to gate admin key checks. If deployed without the `production` feature flag, **any signer** can remove proposals, cancel active proposals, approve/execute multisig proposals, and collect protocol fees.
+- **Exploit:** Attacker calls `admin_cancel_proposal` → forcibly fails proposal → pass token holders lose everything.
+- **Fix:** Always check admin keys at runtime. Store admin in DAO state.
+
+#### [FT-F09] admin_cancel_proposal Drops Pass Pool Reserves
+
+- **File:** `admin_cancel_proposal.rs:95-100`
+- **Description:** When admin cancels, only fail pool merged back to spot. Pass pool reserves silently dropped via `..` pattern destructure. Tokens exist in vault but untracked by AMM.
+- **Exploit:** Large proposal cancelled → pass pool reserves (potentially millions) stranded permanently.
+- **Fix:** Add pass pool reserves back to spot accounting.
+
+### MEDIUM Findings
+
+- **F-03:** TWAP oracle manipulation via observation gap weighting (`futarchy_amm.rs:358-420`). Cap `slot_difference` to ~2 minutes.
+- **F-04:** Arbitrage functions use `unwrap()` extensively — potential DoS on extreme pool states (`futarchy_amm.rs:630-830`).
+- **F-05:** Arbitrage profit `i64` cast overflow for large values (`futarchy_amm.rs:656,694`).
+- **F-08:** TWAP aggregator `wrapping_add` produces incorrect TWAP on overflow (`futarchy_amm.rs:403-406`).
+- **F-10:** Protocol fees in losing pool silently lost on finalization (`finalize_proposal.rs:158-177`).
+- **F-14:** Missing re-execution prevention — no `executed` flag on proposals (`execute_spending_limit_change.rs:35-42`).
+
+---
+
+## Sanctum S Controller — LST AMM ($1.1B TVL)
+
+**Repo:** [igneous-labs/S](https://github.com/igneous-labs/S)
+**Programs:** S Controller, Flat Fee pricing, SOL value calculator programs
+**Prior Audits:** Neodyme, Ottersec, Sec3 (2024)
+
+Single-pool AMM holding hundreds of LSTs. CPI-based composability with pluggable pricing and SOL value calculators. Well-written codebase — no HIGH or CRITICAL findings. Main risk: centralization (single admin, no timelock) for $1.1B TVL.
+
+### Summary Table
+
+| ID | Severity | Title |
+|----|----------|-------|
+| F-01 | MEDIUM | Remove liquidity missing end total SOL value invariant check |
+| F-02 | MEDIUM | Protocol fees can be set to 100% (10,000 BPS) |
+| F-03 | MEDIUM | Negative fees (rebates) create arbitrage opportunities |
+| F-04 | LOW | First depositor LP token minting edge case |
+| F-05 | LOW | Admin can set arbitrary sol_value_calculator programs |
+| F-06 | LOW | Admin can set arbitrary pricing programs |
+| F-07 | LOW | Consistent get_min() slightly undervalues LP holders |
+| F-08 | INFO | Unsafe code in list deserialization (sound) |
+| F-09 | INFO | Single admin key centralization risk |
+| F-10 | INFO | No timelock on admin operations |
+| F-11 | INFO | set_admin missing pool state checks |
+
+### MEDIUM Findings
+
+- **F-01:** `remove_liquidity` missing `end_total_sol_value >= start_total_sol_value` invariant check (`remove_liquidity.rs:83-84`). Other operations (swap, add_liquidity) have this check.
+- **F-02:** Protocol fee validation accepts 10,000 BPS (100%). Compromised admin extracts ALL fees (`set_protocol_fee.rs:44-49`). Fix: Cap at 50% + timelock.
+- **F-03:** Signed i16 fees allow [-10000, 10000]. Combined negative fees produce output >200% of input (`fee_bound.rs:5-9`). Pricing manager exploit possible.
+
+### Positive Findings
+
+- NOT vulnerable to pool share inflation attack (9-decimal precision, 1:1 LP:SOL rate)
+- All arithmetic uses `checked_*` operations — no raw `as` casts in program code
+- Rebalance atomicity enforced via instructions sysvar
+- Swap same LST explicitly prevented
+- Strong solores-generated account verification
 
 ---
 
