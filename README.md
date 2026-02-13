@@ -8,28 +8,30 @@
 
 ## Executive Summary
 
-Comprehensive security audit of **6 Solana DeFi protocols**, focusing on arithmetic safety, access control, oracle handling, and common vulnerability patterns. Identified **20 findings** across all targets — including 3 HIGH severity issues: missing overflow protection and oracle staleness bypass in Port Finance, and unsafe integer casts in OpenBook v2.
+Comprehensive security audit of **6 Solana DeFi protocols**, focusing on arithmetic safety, access control, oracle handling, and common vulnerability patterns. Identified **18 findings** across all targets — including 3 HIGH severity issues: missing overflow protection and oracle staleness bypass in Port Finance, and unsafe integer casts in OpenBook v2.
+
+> **Note:** 2 findings (SS-02, SS-03) were removed after discovering they were independently reported by another auditor ([saber-hq/stable-swap#260](https://github.com/saber-hq/stable-swap/pull/260), submitted Feb 12, 2026).
 
 ### Severity Distribution
 
 | Severity | Count |
 |----------|-------|
 | HIGH | 3 |
-| MEDIUM | 5 |
+| MEDIUM | 3 |
 | LOW | 7 |
 | Informational | 5 |
-| **Total** | **20** |
+| **Total** | **18** |
 
 ### Repos Audited
 
-| Protocol | Repo | Category | Stars |
-|----------|------|----------|-------|
-| Port Finance | [variable-rate-lending](https://github.com/port-finance/variable-rate-lending) | Lending | ~100 |
-| Marinade Finance | [liquid-staking-program](https://github.com/marinade-finance/liquid-staking-program) | Liquid Staking | ~100 |
-| OpenBook v2 | [openbook-v2](https://github.com/openbook-dex/openbook-v2) | DEX/Orderbook | ~300 |
-| Saber Stable-Swap | [stable-swap](https://github.com/saber-hq/stable-swap) | AMM | ~200 |
-| Raydium CLMM | [raydium-clmm](https://github.com/raydium-io/raydium-clmm) | AMM | ~300 |
-| Pump.fun SDK | [pumpfun-rs](https://github.com/pumpfun/pumpfun-rs) | Bonding Curve SDK | ~200 |
+| Protocol | Repo | Category | TVL (Solana) | Status |
+|----------|------|----------|-------------|--------|
+| Port Finance | [variable-rate-lending](https://github.com/port-finance/variable-rate-lending) | Lending | $1.6M | ⚠️ Inactive (last commit Dec 2022) |
+| Marinade Finance | [liquid-staking-program](https://github.com/marinade-finance/liquid-staking-program) | Liquid Staking | N/A | Active |
+| OpenBook v2 | [openbook-v2](https://github.com/openbook-dex/openbook-v2) | DEX/Orderbook | $1.1M | ⚠️ Low activity (last commit Jun 2024) |
+| Saber Stable-Swap | [stable-swap](https://github.com/saber-hq/stable-swap) | AMM | $5.1M | ⚠️ Low activity (last commit Dec 2023) |
+| Raydium CLMM | [raydium-clmm](https://github.com/raydium-io/raydium-clmm) | AMM | $965M | ✅ Active (last commit Dec 2025) |
+| Pump.fun SDK | [pumpfun-rs](https://github.com/pumpfun/pumpfun-rs) | Bonding Curve SDK | N/A (client SDK) | Active |
 
 ---
 
@@ -123,19 +125,13 @@ Comprehensive security audit of **6 Solana DeFi protocols**, focusing on arithme
 - **Impact:** Attacker could pass a crafted fake swap_info account. Partially mitigated by PDA authority derivation.
 - **Fix:** Add `if swap_info.owner != program_id { return Err(ProgramError::IncorrectProgramId); }`.
 
-#### [SS-02] No Fee Rate Validation in set_new_fees — MEDIUM
+#### ~~[SS-02] No Fee Rate Validation in set_new_fees — REMOVED (DUPLICATE)~~
 
-- **File:** `stable-swap-program/program/src/processor/admin.rs`
-- **Description:** Accepts arbitrary `Fees` struct without validation. Admin can set >100% fees or zero denominators causing division-by-zero.
-- **Impact:** Compromised admin key could grief all pool users.
-- **Fix:** Add validation: numerators ≤ denominators, denominators > 0, max fee caps.
+> **Already reported** by another auditor in [saber-hq/stable-swap#260](https://github.com/saber-hq/stable-swap/pull/260) (Feb 12, 2026) as Finding 2.
 
-#### [SS-03] Withdraw Allowed When Pool Is Paused — LOW
+#### ~~[SS-03] Withdraw Allowed When Pool Is Paused — REMOVED (DUPLICATE)~~
 
-- **File:** `stable-swap-program/program/src/processor/swap.rs` — `process_withdraw()`
-- **Description:** Unlike swap, deposit, and withdraw_one, `process_withdraw` doesn't check `is_paused`.
-- **Impact:** Users can withdraw during emergency pause, potentially front-running admin actions.
-- **Fix:** Add pause check or document as intentional design.
+> **Already reported** by another auditor in [saber-hq/stable-swap#260](https://github.com/saber-hq/stable-swap/pull/260) (Feb 12, 2026) as Finding 1 (rated HIGH by them).
 
 #### [SS-04] Off-by-One in `mul_div_imbalanced` Boundary Check — LOW
 
@@ -230,6 +226,14 @@ Comprehensive security audit of **6 Solana DeFi protocols**, focusing on arithme
 | PF-01 | HIGH | [0xksure/variable-rate-lending#1](https://github.com/0xksure/variable-rate-lending/pull/1) — Enable overflow-checks in release profile | Open |
 | PF-02, PF-03 | HIGH, MEDIUM | [0xksure/variable-rate-lending#2](https://github.com/0xksure/variable-rate-lending/pull/2) — Add staleness check for Switchboard V1 FastRound oracle | Open |
 | SS-04 | LOW | [0xksure/stable-swap#1](https://github.com/0xksure/stable-swap/pull/1) — Enable overflow-checks + fix boundary condition | Open |
+
+### Competing Audits Discovered
+
+| Protocol | PR | Auditor | Findings | Overlap with ours |
+|----------|----|---------|---------|--------------------|
+| Saber | [#260](https://github.com/saber-hq/stable-swap/pull/260) | AdeshAtole | 4 (2H, 2M) | SS-02, SS-03 duplicated |
+| OpenBook v2 | [#288](https://github.com/openbook-dex/openbook-v2/pull/288) | AdeshAtole | 5 (all M) | No overlap (different findings) |
+| Raydium CLMM | [#84](https://github.com/raydium-io/raydium-clmm/pull/84) | Core team | Overflow fix | Merged Aug 2024, different scope |
 
 ---
 
