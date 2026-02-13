@@ -56,6 +56,7 @@ Comprehensive security audit of **6 Solana DeFi protocols**, focusing on arithme
   2. Supply crafted inputs causing overflow (e.g., very large deposit amounts)
   3. Wrapped values produce incorrect collateral/debt calculations
 - **Fix:** Add `overflow-checks = true` to `[profile.release]` in Cargo.toml.
+- **Fix PR:** [0xksure/variable-rate-lending#1](https://github.com/0xksure/variable-rate-lending/pull/1)
 
 #### [PF-02] Switchboard V1 FastRound — No Staleness Check — HIGH
 
@@ -63,6 +64,7 @@ Comprehensive security audit of **6 Solana DeFi protocols**, focusing on arithme
 - **Description:** When the Switchboard V1 oracle account type is `TYPE_AGGREGATOR_RESULT_PARSE_OPTIMIZED`, the code deserializes and returns the price **without any staleness check**. The `TYPE_AGGREGATOR` branch correctly validates `round_open_slot` against `STALE_AFTER_SLOTS_ELAPSED`.
 - **Impact:** Stale oracle price exploitation — borrow at inflated collateral value or liquidate at incorrect prices.
 - **Fix:** Add staleness validation matching the `TYPE_AGGREGATOR` branch.
+- **Fix PR:** [0xksure/variable-rate-lending#2](https://github.com/0xksure/variable-rate-lending/pull/2)
 
 #### [PF-03] Unchecked `.unwrap()` on Oracle Deserialization — MEDIUM
 
@@ -70,6 +72,7 @@ Comprehensive security audit of **6 Solana DeFi protocols**, focusing on arithme
 - **Description:** `FastRoundResultAccountData::deserialize(&account_buf).unwrap()` panics on malformed data.
 - **Impact:** DoS on any instruction that refreshes reserves via a corrupted Switchboard V1 account.
 - **Fix:** Use `.map_err(|_| ProgramError::InvalidAccountData)?`.
+- **Fix PR:** [0xksure/variable-rate-lending#2](https://github.com/0xksure/variable-rate-lending/pull/2) (included in PF-02 fix)
 
 #### [PF-04] Unsafe `as u128` Cast of Signed Mantissa — MEDIUM
 
@@ -138,7 +141,7 @@ Comprehensive security audit of **6 Solana DeFi protocols**, focusing on arithme
 
 - **File:** `stable-swap-math/src/curve.rs`
 - **Description:** Uses `>` instead of `>=` for boundary validation, allowing edge-case inputs.
-- **Fix PR:** [fix/overflow-checks-and-boundary](https://github.com/0xksure/stable-swap/tree/fix/overflow-checks-and-boundary)
+- **Fix PR:** [0xksure/stable-swap#1](https://github.com/0xksure/stable-swap/pull/1)
 
 ---
 
@@ -222,9 +225,11 @@ Comprehensive security audit of **6 Solana DeFi protocols**, focusing on arithme
 
 ## Fix Contributions
 
-| Finding | Fix | Status |
-|---------|-----|--------|
-| SS-04 | [fix/overflow-checks-and-boundary](https://github.com/0xksure/stable-swap/tree/fix/overflow-checks-and-boundary) | Branch available |
+| Finding | Severity | Fix PR | Status |
+|---------|----------|--------|--------|
+| PF-01 | HIGH | [0xksure/variable-rate-lending#1](https://github.com/0xksure/variable-rate-lending/pull/1) — Enable overflow-checks in release profile | Open |
+| PF-02, PF-03 | HIGH, MEDIUM | [0xksure/variable-rate-lending#2](https://github.com/0xksure/variable-rate-lending/pull/2) — Add staleness check for Switchboard V1 FastRound oracle | Open |
+| SS-04 | LOW | [0xksure/stable-swap#1](https://github.com/0xksure/stable-swap/pull/1) — Enable overflow-checks + fix boundary condition | Open |
 
 ---
 
